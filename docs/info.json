@@ -1,0 +1,11 @@
+{
+    "company_name": "Университет НЛП",
+    "phone_number": "+123456789",
+    "site_url": "https://neuro-moscow-nlp.ru",
+    "courses": 
+    [{"name": "Основы нейропсихологии",
+    "price": "700р"},
+    {"name": "Нейропсихология обучения",
+    "price": "700р"}]
+
+}
