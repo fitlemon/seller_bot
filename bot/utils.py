@@ -24,6 +24,23 @@ logging.basicConfig(
 env = Env()
 env.read_env()#'../.env', recurse=False)
 
+try:
+    excel_script_path = 'docs/sales_scripts.xlsx'
+    wb = openpyxl.load_workbook(excel_script_path)
+    ws = wb.active
+    scripts_text= ''
+    for row in ws.iter_rows(min_row=2):
+        scripts_text += "Клиент:" + str(row[0].value) + '\n' + "AI ассистент:" + str(row[1].value) + '\n'
+    logging.info(f"Скрипт продаж считан: {scripts_text}")
+except:
+    logging.error("Ошибка при чтении файла system_prompt")
+    
+try:
+    with open('docs/system_prompt.txt', 'r') as f:
+        system_prompt = f.read()
+    logging.info(f"Системный промпт считан: {system_prompt}")
+except:
+    logging.error("Ошибка при чтении файла system_prompt")
 
 class CustomConversationTokenBufferMemory(ConversationTokenBufferMemory):
     def clear(self):
@@ -48,39 +65,83 @@ class CustomConversationTokenBufferMemory(ConversationTokenBufferMemory):
         return d
 
 
-async def update_info() -> tuple[str, str]:
+async def update_scripts_text(user_id: int):
     """ Обновление системного промпта и скрипта продаж
 
     Returns:
         tuple[str, str]: системный промпт, скрипт продаж
     """   
-
     excel_script_path = 'docs/sales_scripts.xlsx'
     wb = openpyxl.load_workbook(excel_script_path)
     ws = wb.active
     scripts_text= ''
     for row in ws.iter_rows(min_row=2):
         scripts_text += "Клиент:" + str(row[0].value) + '\n' + "AI ассистент:" + str(row[1].value) + '\n'
-    scripts_text 
-    
-    # print('Считан скрипт продаж:\n', scripts_text)
-    # with open('docs/train_script.txt', 'r') as f:
-    #     scripts_text = f.read()
-    
+
+    print('Обновлен скрипт продаж:\n', scripts_text)
+    with open(f'docs/scripts_text.txt', 'w') as new_file:
+        new_file.write(scripts_text)
+    try:
+        connection = sqlite3.connect('seller_bot.db')
+        cursor = connection.cursor()
+
+        # Добавляем новое сообщение (вопрос-ответ) в базу
+        cursor.execute('INSERT INTO chats (input, output, user_id, chat_datetime) VALUES (?, ?, ?, ?)', ("Обновленный скрипт продаж", scripts_text, user_id, datetime.datetime.now()))
+
+        # Сохраняем изменения и закрываем соединение
+        connection.commit()
+        connection.close()
+        status = True
+    except sqlite3.Error as error:
+        logging.info("Ошибка при работе с SQLite", error)
+        status = False
+    finally:
+        if connection:
+            connection.close()
+            logging.info("Чат с пользователем {user_id} обновлен в БД.Соединение с SQLite закрыто")
+        return status
+
+
+async def update_system_prompt(user_id: int):
+    """ Обновление системного промпта и скрипта продаж
+
+    Returns:
+        tuple[str, str]: системный промпт, скрипт продаж
+    """   
+   
     with open('docs/system_prompt.txt', 'r') as f:
         system_prompt = f.read()
-    #print('Считан системный промпт\n', system_prompt)
-    
-    return system_prompt, scripts_text
+    print('Обновлен системный промпт\n', system_prompt)
+    try:
+        connection = sqlite3.connect('seller_bot.db')
+        cursor = connection.cursor()
 
+        # Добавляем новое сообщение (вопрос-ответ) в базу
+        cursor.execute('INSERT INTO chats (input, output, user_id, chat_datetime, in_context) VALUES (?, ?, ?, ?, 0)', ("Обновленный системный промпт", system_prompt, user_id, datetime.datetime.now()))
+
+        # Сохраняем изменения и закрываем соединение
+        connection.commit()
+        connection.close()
+        status = True
+    except sqlite3.Error as error:
+        logging.info("Ошибка при работе с SQLite", error)
+        status = False
+    finally:
+        if connection:
+            connection.close()
+            logging.info("Чат с пользователем {user_id} обновлен в БД.Соединение с SQLite закрыто")
+        return status
 
 async def get_prompt() -> PromptTemplate:
     """Сборка шаблона промпта
 
     Returns:
         PromptTemplate: Шаблон промпта
-    """        
-    system_prompt, scripts_text = await update_info()
+    """
+    with open('docs/system_prompt.txt', 'r') as f:
+        system_prompt = f.read()
+    with open('docs/scripts_text.txt', 'r') as f:
+        scripts_text = f.read()
     template = f"""{system_prompt}\n
     Скрипт продаж:\n {scripts_text}\n"""
     template += """История общения с текущим клиентом: \n
@@ -90,7 +151,7 @@ async def get_prompt() -> PromptTemplate:
     AI ассистент:\n"""
     prompt_template = PromptTemplate(input_variables= ["history", "input"],
         template=template,)
-    
+    logging.info(template)
     return prompt_template
         
 # async def get_conversation_chain_history(prompt_template, verbose=False):
@@ -161,7 +222,8 @@ async def get_answer_from_llm(conversation: ConversationChain, input: str) -> st
     Returns:
         str: ответ ИИ
     """
-    try:    
+    try:
+        logging.info(conversation.get_prompts())    
         answer = await conversation.ainvoke(input=input)
         return answer['response']
     except:
@@ -222,14 +284,15 @@ async def insert_user(user_id: int, username: str) -> bool:
             cursor.execute('INSERT INTO users (user_id, username) VALUES (?, ?)', (user_id, username))
         # Сохраняем изменения и закрываем соединение
             connection.commit()
-        status = True
+            logging.info(f"Пользователь {user_id} добавлен в БД. Соединение с SQLite закрыто")
+        status = True        
     except sqlite3.Error as error:
         logging.info("Ошибка при работе с SQLite", error)
         status = False
     finally:
         if connection:
             connection.close()
-            logging.info(f"Пользователь {user_id} добавлен в БД. Соединение с SQLite закрыто")
+            logging.info(f"Пользователь {user_id} уже в БД. Соединение с SQLite закрыто")
         return status
         
         
